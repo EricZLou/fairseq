@@ -406,6 +406,8 @@ def checkpoint_paths(path, pattern=r"checkpoint(\d+)\.pt"):
 
 
 def torch_persistent_save(cfg: CheckpointConfig, obj, filename):
+    import time
+    t = time.time()
     if cfg.write_checkpoints_asynchronously:
         with PathManager.opena(filename, "wb") as f:
             _torch_persistent_save(obj, f)
@@ -419,6 +421,7 @@ def torch_persistent_save(cfg: CheckpointConfig, obj, filename):
             # fallback to non-atomic save
             with PathManager.open(filename, "wb") as f:
                 _torch_persistent_save(obj, f)
+    logger.info(f"torch.save call took {time.time() - t} seconds")
 
 
 def _torch_persistent_save(obj, f):
@@ -482,6 +485,30 @@ def save_state(
         no_save_optimizer_state = cfg.no_save_optimizer_state
     if not no_save_optimizer_state:
         state_dict["last_optimizer_state"] = optimizer.state_dict()
+
+    # This makes the entire checkpoint size 4.5 GB * 4
+    for i in range(1, 4):
+        state_dict.update({
+            f"cfg{i}": cfg,
+            f"args{i}": kwargs.get("args", None),
+            f"model{i}": model_state_dict or {},
+            f"optimizer_history{i}": optim_history
+            + [
+                {
+                    "criterion_name": criterion.__class__.__name__,
+                    "optimizer_name": optimizer.__class__.__name__,
+                    "lr_scheduler_state": lr_scheduler.state_dict(),
+                    "num_updates": num_updates,
+                }
+            ],
+            f"extra_state{i}": extra_state,
+            f"task_state{i}": task.state_dict() if task is not None else {}
+        })
+        if utils.has_parameters(criterion):
+            state_dict[f"criterion{i}"] = criterion.state_dict()
+
+        if not no_save_optimizer_state:
+            state_dict[f"last_optimizer_state{i}"] = optimizer.state_dict()
 
     # keep everything on CPU
     state_dict = utils.move_to_cpu(state_dict)
